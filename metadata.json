@@ -1,0 +1,7 @@
+{
+  "name": "Mobile Trading Assistant",
+  "description": "A high-safety mobile trading companion for parsing Telegram signals, tracking performance, and managing assisted trade execution with voice control.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
