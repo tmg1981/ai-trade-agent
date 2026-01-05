@@ -16,7 +16,25 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ onClose }) => {
   const [intent, setIntent] = useState<any>(null);
   
   const recognitionRef = useRef<any>(null);
-  const { signals, updateSignal, addLog, config, updateConfig } = useStore();
+  const { 
+    signals, 
+    positions, 
+    confirmSignal, 
+    closePosition, 
+    cancelSignal, 
+    addLog, 
+    config, 
+    updateConfig, 
+    setActiveTab 
+  } = useStore();
+
+  const speak = (text: string) => {
+    if ('speechSynthesis' in window) {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.1;
+      window.speechSynthesis.speak(utterance);
+    }
+  };
 
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -57,41 +75,87 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ onClose }) => {
       setStatus('CONFIRMING');
     } else {
       setStatus('IDLE');
-      alert("Command not recognized. Try 'Confirm this trade' or 'Close position'");
+      speak("Command not recognized. Please try again.");
     }
   };
 
   const executeIntent = () => {
     const { command, targetId } = intent;
+    let feedback = "Command executed.";
     
     switch (command) {
       case 'CONFIRM_TRADE':
-        const pending = signals.find(s => s.status === SignalStatus.VALIDATED || s.status === SignalStatus.NEW);
+        // Find latest signal in QUEUED or PENDING_CONFIRMATION
+        const pending = signals
+          .filter(s => s.status === SignalStatus.QUEUED || s.status === SignalStatus.PENDING_CONFIRMATION)
+          .sort((a, b) => b.timestamp - a.timestamp)[0];
         if (pending) {
-          updateSignal(pending.id, { status: SignalStatus.EXECUTED });
+          confirmSignal(pending.id);
           addLog('USER_ACTION', `Voice confirm: ${pending.pair}`);
+          feedback = `Trade confirmed for ${pending.pair}. Monitoring for entry.`;
+        } else {
+          feedback = "No pending trades found to confirm.";
         }
         break;
+
+      case 'CANCEL_SIGNAL':
+        // Find latest signal that isn't closed or cancelled
+        const lastSignal = signals
+          .filter(s => s.status !== SignalStatus.CLOSED && s.status !== SignalStatus.CANCELLED)
+          .sort((a, b) => b.timestamp - a.timestamp)[0];
+        if (lastSignal) {
+          cancelSignal(lastSignal.id);
+          addLog('USER_ACTION', `Voice cancel: ${lastSignal.pair}`);
+          feedback = `Last signal for ${lastSignal.pair} has been cancelled.`;
+        } else {
+          feedback = "No active signals found to cancel.";
+        }
+        break;
+
       case 'CLOSE_POSITION':
-        const active = signals.find(s => s.status === SignalStatus.EXECUTED);
-        if (active) {
-          updateSignal(active.id, { status: SignalStatus.CLOSED, pnl: 0 });
-          addLog('USER_ACTION', `Voice close: ${active.pair}`);
+        // Find positions with targetId (e.g. "BTC") or just the latest if none specified
+        const target = targetId ? targetId.toUpperCase() : null;
+        const toClose = positions.filter(p => !target || p.pair.toUpperCase().includes(target));
+        if (toClose.length > 0) {
+          toClose.forEach(p => closePosition(p.id));
+          addLog('USER_ACTION', `Voice close: ${target || 'All positions'}`);
+          feedback = target ? `Closing all ${target} positions.` : "Closing active positions.";
+        } else {
+          feedback = target ? `No active ${target} positions found.` : "No active positions found.";
         }
         break;
-      case 'TOGGLE_ASSISTED':
-        updateConfig({ isAssistedModeEnabled: !config.isAssistedModeEnabled });
-        addLog('USER_ACTION', `Voice toggle assisted mode: ${!config.isAssistedModeEnabled}`);
+
+      case 'SHOW_TRADES':
+        setActiveTab('dashboard');
+        addLog('USER_ACTION', "Voice navigate: Dashboard");
+        feedback = "Navigating to dashboard.";
         break;
+
+      case 'PAUSE_TRADING':
+        updateConfig({ executionMode: 'MANUAL' });
+        addLog('USER_ACTION', "Voice pause: Manual mode activated");
+        feedback = "Trading paused. Manual mode activated.";
+        break;
+
+      case 'TOGGLE_ASSISTED':
+        const newMode = config.executionMode === 'ASSISTED' ? 'MANUAL' : 'ASSISTED';
+        updateConfig({ executionMode: newMode });
+        addLog('USER_ACTION', `Voice toggle execution mode: ${newMode}`);
+        feedback = `Execution mode set to ${newMode}.`;
+        break;
+      
+      default:
+        feedback = "Unknown command.";
     }
     
+    speak(feedback);
     setStatus('DONE');
-    setTimeout(() => onClose(), 1000);
+    setTimeout(() => onClose(), 1200);
   };
 
   return (
     <div className="fixed inset-0 z-[100] bg-slate-950/90 backdrop-blur-xl flex items-center justify-center p-6">
-      <button onClick={onClose} className="absolute top-8 right-8 text-slate-400">
+      <button onClick={onClose} className="absolute top-8 right-8 text-slate-400 p-2 hover:bg-slate-800 rounded-full transition-colors">
         <X size={32} />
       </button>
 
@@ -110,11 +174,11 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ onClose }) => {
             {status === 'IDLE' && "Tap to Speak"}
             {status === 'LISTENING' && "Listening..."}
             {status === 'PROCESSING' && "Analyzing Command..."}
-            {status === 'CONFIRMING' && "Confirm Execution?"}
+            {status === 'CONFIRMING' && "Confirm Action?"}
             {status === 'DONE' && "Command Executed"}
           </h2>
-          <p className="text-slate-400 min-h-[1.5rem] italic">
-            "{transcript || "Try saying 'Confirm latest signal'..."}"
+          <p className="text-slate-400 min-h-[1.5rem] italic text-sm">
+            "{transcript || "Try saying 'Confirm this trade'..."}"
           </p>
         </div>
 
@@ -122,13 +186,16 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ onClose }) => {
           <div className="flex gap-4 w-full">
             <button 
               onClick={executeIntent}
-              className="flex-1 bg-blue-600 py-4 rounded-2xl font-bold flex items-center justify-center gap-2"
+              className="flex-1 bg-blue-600 py-4 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform"
             >
-              <CheckCircle2 size={20} /> Yes, Execute
+              <CheckCircle2 size={20} /> Yes, Do It
             </button>
             <button 
-              onClick={() => setStatus('IDLE')}
-              className="flex-1 bg-slate-800 py-4 rounded-2xl font-bold"
+              onClick={() => {
+                setStatus('IDLE');
+                speak("Action cancelled.");
+              }}
+              className="flex-1 bg-slate-800 py-4 rounded-2xl font-bold active:scale-95 transition-transform"
             >
               Cancel
             </button>
@@ -138,7 +205,7 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ onClose }) => {
         {status === 'IDLE' && (
           <button 
             onClick={toggleListening}
-            className="w-full bg-blue-600 py-4 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-all"
+            className="w-full bg-blue-600 py-4 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-all shadow-xl shadow-blue-900/20"
           >
             <PlayCircle size={20} /> Start Voice Control
           </button>

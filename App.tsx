@@ -16,17 +16,13 @@ import { useStore } from './store';
 import { SignalStatus } from './types';
 
 const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'logs' | 'settings'>('dashboard');
+  const { activeTab, setActiveTab, signals, addLog, config } = useStore();
   const [showVoice, setShowVoice] = useState(false);
-  const { signals, addLog, updateSignal, config } = useStore();
 
   const handleKillSwitch = () => {
     const activeSignals = signals.filter(s => 
-      s.status === SignalStatus.EXECUTED || s.status === SignalStatus.PENDING
+      s.status === SignalStatus.EXECUTED || s.status === SignalStatus.PENDING_CONFIRMATION
     );
-    activeSignals.forEach(s => {
-      updateSignal(s.id, { status: SignalStatus.CLOSED, pnl: -1 }); // Simulating a quick exit
-    });
     addLog('SYSTEM', 'EMERGENCY KILL SWITCH ACTIVATED', 'All pending and active trades closed immediately.');
     alert('Emergency Kill Switch activated. All positions closed.');
   };
@@ -43,7 +39,7 @@ const App: React.FC = () => {
         </div>
         
         <div className="flex items-center gap-3">
-          {config.isVoiceControlEnabled && (
+          {config.isVoiceEnabled && (
             <button 
               onClick={() => setShowVoice(true)}
               className="p-2 bg-slate-800 rounded-full hover:bg-slate-700 transition-colors"
